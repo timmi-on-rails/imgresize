@@ -5,14 +5,14 @@
     using System.Linq;
     using System.Reactive.Linq;
     using System.Reactive.Threading.Tasks;
-    using System.Threading.Tasks;
 
     using LanguageExt;
 
     using static LanguageExt.Prelude;
 
-    using SixLabors.ImageSharp.Formats.Jpeg;
-    using ImageResizer.Components;
+    using LanguageExt.Sys.Traits;
+    using LanguageExt.Sys.IO;
+    using LanguageExt.Sys.Live;
 
     public static class Processor
     {
@@ -24,7 +24,7 @@
         public static IObservable<Option<WorkingStateInfo>> RunAsync(
             Options options,
             CancellationToken cancellationToken = default)
-            => ProcessDirectory(options, cancellationToken)
+            => Observable.Defer(() => ProcessDirectory(options, cancellationToken))
                 .Select(Some)
                 .Append(None)
                 .Concat(Wait<Option<WorkingStateInfo>>(
@@ -65,7 +65,8 @@
                 .Select(item => Observable.Defer(() =>
                     cancellationToken.IsCancellationRequested ?
                         Observable.Empty<TaskItem>() :
-                        Observable.FromAsync(() => ProcessAsync(item, options))))
+                        Observable.FromAsync(async () =>
+                        (await (ProcessAsync<Runtime>(item, options).Run(Runtime.New()))).ThrowIfFail())))
                 .Merge(options.MaxConcurrent)
                 .Scan(
                     new WorkingStateInfo(taskItemsCount, taskItemsCount),
@@ -88,25 +89,19 @@
         /// Process a single task item.
         /// </summary>
         /// <returns>Task.</returns>
-        private static async Task<TaskItem> ProcessAsync(TaskItem item, Options options)
-        {
-            string original = Path.Combine(options.DestinationDirectory, Path.GetFileName(item.Value));
-            File.Move(item.Value, original);
-
-            var img = await Resizer.ResizeAsync(
-                new TaskItem(original),
-                options.Width,
-                options.Height,
-                options.KeepAspectRatio);
-
-            if (img != null)
-            {
-                using var writeStream = File.OpenWrite(Path.Combine(options.MovedDirectory, Path.GetFileName(item.Value)));
-                await img.SaveAsync(writeStream, new JpegEncoder { ColorType = JpegColorType.Rgb, Quality = 85 });
-            }
-
-            return item;
-        }
+        private static Aff<RT, TaskItem> ProcessAsync<RT>(TaskItem item, Options options)
+            where RT : struct, HasFile<RT>
+            => from _1 in Eff(() => unit)
+               let original = Path.Combine(options.DestinationDirectory, Path.GetFileName(item.Value))
+               from _2 in File<RT>.copy(item.Value, original)
+               from _3 in File<RT>.delete(item.Value)
+               from _4 in Img.CopyImageResized<RT>(
+                   original,
+                   Path.Combine(options.MovedDirectory, Path.GetFileName(item.Value)),
+                   options.Width,
+                   options.Height,
+                   options.KeepAspectRatio)
+               select item;
 
         /// <summary>
         /// Working state information.
