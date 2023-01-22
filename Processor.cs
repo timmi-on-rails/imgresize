@@ -64,7 +64,7 @@
             return taskItems
                 .Select(item => Observable.Defer(() =>
                     cancellationToken.IsCancellationRequested ?
-                        Observable.Empty<TaskItem>() :
+                        Observable.Empty<string>() :
                         Observable.FromAsync(async () =>
                         (await (ProcessAsync<Runtime>(item, options).Run(Runtime.New()))).ThrowIfFail())))
                 .Merge(options.MaxConcurrent)
@@ -79,29 +79,29 @@
         /// </summary>
         /// <param name="directory">Absolute directory path.</param>
         /// <returns>List of task items.</returns>
-        private static IEnumerable<TaskItem> CheckForImageFiles(string directory)
+        private static IEnumerable<string> CheckForImageFiles(string directory)
             => new DirectoryInfo(directory)
                 .GetFiles()
                 .Where(f => f.Extension.Contains("jpg", StringComparison.InvariantCultureIgnoreCase))
-                .Select(f => new TaskItem(f.FullName));
+                .Select(f =>f.FullName);
 
         /// <summary>
-        /// Process a single task item.
+        /// Process a single image.
         /// </summary>
         /// <returns>Task.</returns>
-        private static Aff<RT, TaskItem> ProcessAsync<RT>(TaskItem item, Options options)
+        private static Aff<RT, string> ProcessAsync<RT>(string path, Options options)
             where RT : struct, HasFile<RT>
             => from _1 in Eff(() => unit)
-               let original = Path.Combine(options.DestinationDirectory, Path.GetFileName(item.Value))
-               from _2 in File<RT>.copy(item.Value, original)
-               from _3 in File<RT>.delete(item.Value)
+               let original = Path.Combine(options.DestinationDirectory, Path.GetFileName(path))
+               from _2 in File<RT>.copy(path, original)
+               from _3 in File<RT>.delete(path)
                from _4 in Img.CopyImageResized<RT>(
                    original,
-                   Path.Combine(options.MovedDirectory, Path.GetFileName(item.Value)),
+                   Path.Combine(options.MovedDirectory, Path.GetFileName(path)),
                    options.Width,
                    options.Height,
                    options.KeepAspectRatio)
-               select item;
+               select path;
 
         /// <summary>
         /// Working state information.
