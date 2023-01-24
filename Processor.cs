@@ -1,10 +1,7 @@
 ﻿namespace ImageResizer;
 
 using System;
-using System.Collections.Generic;
 using System.Linq;
-using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 
 using LanguageExt;
 
@@ -13,6 +10,9 @@ using static LanguageExt.Prelude;
 using LanguageExt.Sys.Traits;
 using LanguageExt.Sys.IO;
 using LanguageExt.Sys.Live;
+using LanguageExt.Pipes;
+using LanguageExt.Effects.Traits;
+using LanguageExt.Sys;
 
 public static class Processor
 {
@@ -21,19 +21,28 @@ public static class Processor
     /// </summary>
     /// <returns>Observable of optional working state information.
     /// Missing values indicate that there is currently no work to do.</returns>
-    public static IObservable<Option<WorkingStateInfo>> RunAsync(
-        Options options,
-        CancellationToken cancellationToken = default)
-        => Observable.Defer(() => ProcessDirectory(options, cancellationToken))
-            .Select(Some)
-            .Append(None)
-            .Concat(Wait<Option<WorkingStateInfo>>(
-                options.CheckDelay.ToTimeSpan(),
-                cancellationToken))
-            .Repeat()
-            .OnErrorResumeNext(Observable.Empty<Option<WorkingStateInfo>>())
-            .Replay(1)
-            .AutoConnect(0);
+    public static Producer<RT, Fin<string>, Unit> RunAsync<RT>(Options options)
+        where RT : struct, HasCancel<RT>, HasDirectory<RT>, HasFile<RT>, HasConsole<RT>
+        => from producer in Eff(() => ProcessSourceDirectory<RT>(options))
+           from _0 in Console<RT>.writeLine("about to check")
+           from _1 in producer
+           from _3 in Console<RT>.writeLine("checked")
+           from _2 in Aff<RT, Unit>(async _ =>
+           {
+               await Task.Delay(1000);
+               return unit;
+           })
+           select unit;
+    //=> Observable.Defer(() => ProcessDirectory<Runtime>(options, cancellationToken))
+    //    .Select(Some)
+    //    .Append(None)
+    //    .Concat(Wait<Option<WorkingStateInfo>>(
+    //        options.CheckDelay.ToTimeSpan(),
+    //        cancellationToken))
+    //    .Repeat()
+    //    .OnErrorResumeNext(Observable.Empty<Option<WorkingStateInfo>>())
+    //    .Replay(1)
+    //    .AutoConnect(0);
 
     /// <summary>
     /// Creates an observable sequence that emits no elements and
@@ -41,55 +50,50 @@ public static class Processor
     /// If cancellation is requested the sequence immediately
     /// emits an error.
     /// </summary>
-    private static IObservable<T> Wait<T>(
-        TimeSpan duration,
-        CancellationToken cancellationToken)
-        => Observable
-            .Never<T>()
-            .ToTask(cancellationToken)
-            .ToObservable()
-            .TakeUntil(Observable.Timer(duration));
+    //private static IObservable<T> Wait<T>(
+    //    TimeSpan duration,
+    //    CancellationToken cancellationToken)
+    //    => Observable
+    //        .Never<T>()
+    //        .ToTask(cancellationToken)
+    //        .ToObservable()
+    //        .TakeUntil(Observable.Timer(duration));
 
     /// <summary>
     /// Process all files in the source directory concurrently.
     /// </summary>
     /// <returns>Sequence of processed files/state info.</returns>
-    private static IObservable<WorkingStateInfo> ProcessDirectory(
-        Options options,
-        CancellationToken cancellationToken)
-    {
-        var taskItems = CheckForImageFiles(options.SourceDirectory);
-        int taskItemsCount = taskItems.Count();
+    private static Producer<RT, Fin<string>, Unit> ProcessSourceDirectory<RT>(Options options)
+            where RT : struct, HasDirectory<RT>, HasCancel<RT>, HasFile<RT>, HasConsole<RT>
+            => from images in Directory<RT>.enumerateFiles(options.SourceDirectory, "*.jpg")
+               let affs = images.Select(img => ProcessImageFile<RT>(img, options)).ToArray()
+               from results in AffUtil.Merge<RT, string>(affs)
+               from __ in Console<RT>.writeLine("Found " + affs.Length + " files.")
+               from _ in Proxy.enumerate<Fin<string>>(results)
+               select unit;
 
-        return taskItems
-            .Select(item => Observable.Defer(() =>
-                cancellationToken.IsCancellationRequested ?
-                    Observable.Empty<string>() :
-                    Observable.FromAsync(async () =>
-                    (await (ProcessAsync<Runtime>(item, options).Run(Runtime.New()))).ThrowIfFail())))
-            .Merge(options.MaxConcurrent)
-            .Scan(
-                new WorkingStateInfo(taskItemsCount, taskItemsCount),
-                (ws, _) => ws with { CurrentCount = ws.CurrentCount - 1 })
-            .StartWith(new WorkingStateInfo(taskItemsCount, taskItemsCount));
-    }
+    //{
+    //    var taskItems = ListImageFiles<Runtime>(options.SourceDirectory).Run(Runtime.New()).ThrowIfFail();
+    //    int taskItemsCount = taskItems.Count();
 
-    /// <summary>
-    /// Find all image files in the given directory.
-    /// </summary>
-    /// <param name="directory">Absolute directory path.</param>
-    /// <returns>List of task items.</returns>
-    private static IEnumerable<string> CheckForImageFiles(string directory)
-        => new DirectoryInfo(directory)
-            .GetFiles()
-            .Where(f => f.Extension.Contains("jpg", StringComparison.InvariantCultureIgnoreCase))
-            .Select(f =>f.FullName);
+    //    return taskItems
+    //        .Select(item => Observable.Defer(() =>
+    //            cancellationToken.IsCancellationRequested ?
+    //                Observable.Empty<string>() :
+    //                Observable.FromAsync(async () =>
+    //                (await (ProcessAsync<Runtime>(item, options).Run(Runtime.New()))).ThrowIfFail())))
+    //        .Merge(options.MaxConcurrent)
+    //        .Scan(
+    //            new WorkingStateInfo(taskItemsCount, taskItemsCount),
+    //            (ws, _) => ws with { CurrentCount = ws.CurrentCount - 1 })
+    //        .StartWith(new WorkingStateInfo(taskItemsCount, taskItemsCount));
+    //}
 
     /// <summary>
-    /// Process a single image.
+    /// Process a single image file.
     /// </summary>
     /// <returns>Task.</returns>
-    private static Aff<RT, string> ProcessAsync<RT>(string path, Options options)
+    private static Aff<RT, string> ProcessImageFile<RT>(string path, Options options)
         where RT : struct, HasFile<RT>
         => from _1 in Eff(() => unit)
            let original = Path.Combine(options.DestinationDirectory, Path.GetFileName(path))

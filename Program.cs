@@ -1,12 +1,21 @@
 ﻿namespace ImageResizer;
 
-using System.Reactive.Linq;
+using LanguageExt;
+using LanguageExt.Effects.Traits;
+using LanguageExt.Pipes;
+using LanguageExt.Sys;
+using LanguageExt.Sys.Live;
+using LanguageExt.Sys.Traits;
 
 using static LanguageExt.Prelude;
 
 class Program
 {
-    static async Task Main(string[] args)
+    private static async Task Main(string[] args)
+        => await Main<Runtime>(args).RunUnit(Runtime.New());
+
+    public static Aff<RT, Unit> Main<RT>(string[] args)
+        where RT : struct, HasCancel<RT>, HasConsole<RT>, HasFile<RT>, HasDirectory<RT>
     {
         var opts = new Options()
         {
@@ -20,25 +29,40 @@ class Program
             CheckDelay = 500 * ms,
         };
 
-        CancellationTokenSource cts = new();
-        Console.CancelKeyPress += (o, e) =>
-        {
-            e.Cancel = true;
-            cts.Cancel();
-        };
 
-        var statusObservable = Processor.RunAsync(opts, cts.Token);
+        //Console.CancelKeyPress += (o, e) =>
+        //{
+        //    e.Cancel = true;
+        //    runtime.CancellationTokenSource.Cancel();
+        //};
 
-        using var _ = statusObservable.Subscribe(workingState =>
-        {
-            var msg = workingState.Match(
-                Some: state => $"{state.CurrentCount}/{state.TaskCount}",
-                None: () => "Waiting...");
+        //var producer = Processor.RunAsync<RT>(opts);
 
-            do { Console.Write("\b \b"); } while (Console.CursorLeft > 0);
-            Console.Write(msg);
-        });
+        //var effect = producer | writeLine<RT>();
+        //return effect.RunEffect<RT, Unit>();
 
-        await statusObservable.LastOrDefaultAsync();
+        return
+            from __ in Console<RT>.writeLine("sad")
+            from _ in (Processor.RunAsync<RT>(opts) | writeLine<RT>())
+            select unit;
+
+
+        //using var _ = statusObservable.Subscribe(workingState =>
+        //{
+        //    var msg = workingState.Match(
+        //        Some: state => $"{state.CurrentCount}/{state.TaskCount}",
+        //        None: () => "Waiting...");
+
+        //    do { Console.Write("\b \b"); } while (Console.CursorLeft > 0);
+        //    Console.Write(msg);
+        //});
+
+        //await statusObservable.LastOrDefaultAsync();
     }
+
+    private static Consumer<RT, Fin<string>, Unit> writeLine<RT>()
+        where RT : struct, HasCancel<RT>, HasConsole<RT>
+        => from fin in Proxy.awaiting<Fin<string>>()
+           from _ in Console<RT>.writeLine(fin.ToOption().IfNone("failed"))
+           select unit;
 }
