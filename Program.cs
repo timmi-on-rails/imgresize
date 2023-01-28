@@ -27,22 +27,24 @@ class Program
            from _ in (Processor<RT>.RunAsync(opts) | writeLine<RT>())
            select unit;
 
-    private static Consumer<RT, Fin<string>, Unit> writeLine<RT>()
+    private static Consumer<RT, Option<WorkingStateInfo>, Unit> writeLine<RT>()
         where RT : struct, HasCancel<RT>, HasConsole<RT>
-        => from fin in Proxy.awaiting<Fin<string>>()
-           from _ in Console<RT>.writeLine(fin.ToOption().IfNone("failed"))
+        => from info in Proxy.awaiting<Option<WorkingStateInfo>>()
+           from _ in OutputInfo<RT>(info)
            select unit;
 
-    // TODO show processing
-    //using var _ = statusObservable.Subscribe(workingState =>
-    //{
-    //    var msg = workingState.Match(
-    //        Some: state => $"{state.CurrentCount}/{state.TaskCount}",
-    //        None: () => "Waiting...");
+    private static Eff<RT, Unit> OutputInfo<RT>(Option<WorkingStateInfo> info)
+        where RT : struct, HasConsole<RT>
+    {
+        var msg = info.Match(
+            Some: state => $"{state.CurrentCount}/{state.TaskCount}",
+            None: () => "Waiting...");
 
-    //    do { Console.Write("\b \b"); } while (Console.CursorLeft > 0);
-    //    Console.Write(msg);
-    //});
+        return from _1 in Console<RT>.write(
+            "\r" + new string(' ', 40 /* TODO missing Console window with in ConsoleIO */) + "\r")
+               from _2 in Console<RT>.write(msg)
+               select unit;
+    }
 
     private static Eff<RT, Options> CommandLineOptions<RT>(string[] args)
         where RT : struct, HasCancel<RT>

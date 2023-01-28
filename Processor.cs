@@ -13,6 +13,13 @@ using LanguageExt.Pipes;
 using LanguageExt.Effects.Traits;
 using LanguageExt.Sys;
 
+/// <summary>
+/// Working state information.
+/// </summary>
+/// <param name="TaskCount">Get total workload.</param>
+/// <param name="CurrentCount">Get current workload.</param>
+public record WorkingStateInfo(int TaskCount, int CurrentCount);
+
 public static class Processor<RT>
     where RT : struct, HasCancel<RT>, HasDirectory<RT>, HasFile<RT>, HasConsole<RT>, HasTime<RT>
 {
@@ -21,9 +28,9 @@ public static class Processor<RT>
     /// </summary>
     /// <returns>Observable of optional working state information.
     /// Missing values indicate that there is currently no work to do.</returns>
-    public static Producer<RT, Fin<string>, Unit> RunAsync(Options options)
+    public static Producer<RT, Option<WorkingStateInfo>, Unit> RunAsync(Options options)
         // TODO add interleaving None values after each check!
-        => repeat(ProcessSourceDirectory(options));
+        => repeat(ProcessSourceDirectory(options) | ThePipe);
 
     /// <summary>
     /// Process all files in the source directory concurrently.
@@ -36,9 +43,8 @@ public static class Processor<RT>
            // TODO check if lazy character of Seq is problematic
            let affs = images.Map(img => ProcessImageFile(img, options))
            from results in AffUtil.Merge<RT, string>(affs, options.MaxConcurrent)
-           from _2 in Console<RT>.writeLine("Found " + affs.Length + " files.")
            // TODO dirty to check on images
-           from _3 in images.Count > 0 ? Proxy.enumerate<Fin<string>>(results) : Proxy.Pure(unit)
+           from _2 in images.Count > 0 ? Proxy.enumerate<Fin<string>>(results) : Proxy.Pure(unit)
            select unit;
 
 
@@ -47,9 +53,10 @@ public static class Processor<RT>
     //            (ws, _) => ws with { CurrentCount = ws.CurrentCount - 1 })
     //        .StartWith(new WorkingStateInfo(taskItemsCount, taskItemsCount));
 
-    //private static Pipe<RT, string, WorkingStateInfo, Unit> ThePipe =>
-    //    from _ in awaiting<string>()
-    //    select fold
+    private static Pipe<RT, Fin<string>, Option<WorkingStateInfo>, Unit> ThePipe =>
+        from _ in awaiting<Fin<string>>()
+        from __ in yield(Some(new WorkingStateInfo(1,1)))
+        select unit;
 
     /// <summary>
     /// Process a single image file.
@@ -68,11 +75,4 @@ public static class Processor<RT>
                options.Height,
                options.KeepAspectRatio)
            select path;
-
-    /// <summary>
-    /// Working state information.
-    /// </summary>
-    /// <param name="TaskCount">Get total workload.</param>
-    /// <param name="CurrentCount">Get current workload.</param>
-    public record WorkingStateInfo(int TaskCount, int CurrentCount);
 }
