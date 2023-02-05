@@ -24,13 +24,14 @@ class Program
     public static Aff<RT, Unit> MainIO<RT>(string[] args)
         where RT : struct, HasCancel<RT>, HasConsole<RT>, HasFile<RT>, HasDirectory<RT>, HasTime<RT>
         => from opts in CommandLineOptions<RT>(args)
-           from _ in (Processor<RT>.RunAsync(opts) | writeLine<RT>())
+           from _ in (Processor<RT>.Run(opts) | writeLine<RT>())
            select unit;
 
     private static Consumer<RT, Option<WorkingStateInfo>, Unit> writeLine<RT>()
         where RT : struct, HasCancel<RT>, HasConsole<RT>
         => from info in Proxy.awaiting<Option<WorkingStateInfo>>()
-           from _ in OutputInfo<RT>(info)
+           from _1 in OutputInfo<RT>(info)
+           from _2 in writeLine<RT>()
            select unit;
 
     private static Eff<RT, Unit> OutputInfo<RT>(Option<WorkingStateInfo> info)

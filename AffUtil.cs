@@ -10,7 +10,7 @@ public static class AffUtil
 {
     // TODO limit concurrent tasks
     public static Eff<RT, IAsyncEnumerable<Fin<T>>> Merge<RT, T>(
-       Seq<Aff<RT, T>> list,
+       this Seq<Aff<RT, T>> list,
        int maxConcurrent)
         where RT : struct, HasCancel<RT>
     {

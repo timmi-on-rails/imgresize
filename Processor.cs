@@ -20,6 +20,10 @@ using LanguageExt.Sys;
 /// <param name="CurrentCount">Get current workload.</param>
 public record WorkingStateInfo(int TaskCount, int CurrentCount);
 
+// TODO:
+// Return error sum-type for better error messages
+// Handle error-recovery code -> file.delete etc.
+
 public static class Processor<RT>
     where RT : struct, HasCancel<RT>, HasDirectory<RT>, HasFile<RT>, HasConsole<RT>, HasTime<RT>
 {
@@ -28,51 +32,60 @@ public static class Processor<RT>
     /// </summary>
     /// <returns>Observable of optional working state information.
     /// Missing values indicate that there is currently no work to do.</returns>
-    public static Producer<RT, Option<WorkingStateInfo>, Unit> RunAsync(Options options)
-        // TODO add interleaving None values after each check!
-        => repeat(ProcessSourceDirectory(options) | ThePipe);
+    public static Producer<RT, Option<WorkingStateInfo>, Unit> Run(Options options)
+        => repeat(
+            from _1 in (
+                ProcessSourceDirectory(options) |
+                Pipe.map<RT, WorkingStateInfo, Option<WorkingStateInfo>, Unit>(Some))
+            from _2 in yield(Option<WorkingStateInfo>.None)
+            from _3 in Time<RT>.sleepFor(options.CheckDelay)
+            select unit);
 
     /// <summary>
     /// Process all files in the source directory concurrently.
     /// </summary>
     /// <returns>Sequence of processed files/state info.</returns>
-    private static Producer<RT, Fin<string>, Unit> ProcessSourceDirectory(Options options)
-        // TODO sleepFor belongs in caller code, where repeat is.    
-        => from _1 in Time<RT>.sleepFor(options.CheckDelay)
-           from images in Directory<RT>.enumerateFiles(options.SourceDirectory, "*.jpg")
-           // TODO check if lazy character of Seq is problematic
-           let affs = images.Map(img => ProcessImageFile(img, options))
-           from results in AffUtil.Merge<RT, string>(affs, options.MaxConcurrent)
-           // TODO dirty to check on images
-           from _2 in images.Count > 0 ? Proxy.enumerate<Fin<string>>(results) : Proxy.Pure(unit)
-           select unit;
+    private static Producer<RT, WorkingStateInfo, Unit> ProcessSourceDirectory(Options options)
+    {
+        return from images in Directory<RT>.enumerateFiles(options.SourceDirectory, "*.jpg")
+               from _1 in images.Count > 0 ?
+                    yield(new WorkingStateInfo(images.Count, images.Count)) :
+                    Pure(unit)
+               from _2 in go(images) | Increment(images.Count)
+               select unit;
 
+        Producer<RT, Fin<Unit>, Unit> go(Seq<string> images)
+            => from results in images
+                    .Map(img => ProcessImageFile(img, options))
+                    .Merge(options.MaxConcurrent)
+               from _ in yieldAll(results)
+               select unit;
 
-    //        .Scan(
-    //            new WorkingStateInfo(taskItemsCount, taskItemsCount),
-    //            (ws, _) => ws with { CurrentCount = ws.CurrentCount - 1 })
-    //        .StartWith(new WorkingStateInfo(taskItemsCount, taskItemsCount));
+        static Pipe<RT, Fin<Unit>, WorkingStateInfo, Unit> Increment(int count)
+        {
+            var counter = Atom(count);
 
-    private static Pipe<RT, Fin<string>, Option<WorkingStateInfo>, Unit> ThePipe =>
-        from _ in awaiting<Fin<string>>()
-        from __ in yield(Some(new WorkingStateInfo(1,1)))
-        select unit;
+            return from _1 in awaiting<Fin<Unit>>()
+                   from _2 in counter.SwapEff<RT>(c => SuccessEff(c - 1))
+                   from _3 in yield(new WorkingStateInfo(count, counter))
+                   select unit;
+        }
+    }
 
     /// <summary>
     /// Process a single image file.
     /// </summary>
-    /// <returns>Task.</returns>
-    private static Aff<RT, string> ProcessImageFile(string path, Options options)
+    private static Aff<RT, Unit> ProcessImageFile(string path, Options options)
         => from _1 in Eff(() => unit)
            let original = Path.Combine(options.DestinationDirectory, Path.GetFileName(path))
            // TODO use File.move once available -> HasFileMoveIO
            from _2 in File<RT>.copy(path, original)
            from _3 in File<RT>.delete(path)
-           from _4 in Img.CopyImageResized<RT>(
+           from _4 in Img<RT>.CopyImageResized(
                original,
                Path.Combine(options.MovedDirectory, Path.GetFileName(path)),
                options.Width,
                options.Height,
                options.KeepAspectRatio)
-           select path;
+           select unit;
 }
