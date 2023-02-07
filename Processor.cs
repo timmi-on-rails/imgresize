@@ -12,6 +12,8 @@ using LanguageExt.Sys.IO;
 using LanguageExt.Pipes;
 using LanguageExt.Effects.Traits;
 using LanguageExt.Sys;
+using ImageResizer.Runtime.Traits;
+using ImageResizer.Runtime.Sys;
 
 /// <summary>
 /// Working state information.
@@ -21,11 +23,13 @@ using LanguageExt.Sys;
 public record WorkingStateInfo(int TaskCount, int CurrentCount);
 
 // TODO:
+// handle error of single work item
 // Return error sum-type for better error messages
 // Handle error-recovery code -> file.delete etc.
 
 public static class Processor<RT>
-    where RT : struct, HasCancel<RT>, HasDirectory<RT>, HasFile<RT>, HasConsole<RT>, HasTime<RT>
+    where RT : struct, HasCancel<RT>, HasDirectory<RT>, HasFile<RT>,
+    HasFileMove<RT>, HasConsole<RT>, HasTime<RT>
 {
     /// <summary>
     /// Run the processor loop indefinitely.
@@ -76,12 +80,9 @@ public static class Processor<RT>
     /// Process a single image file.
     /// </summary>
     private static Aff<RT, Unit> ProcessImageFile(string path, Options options)
-        => from _1 in Eff(() => unit)
-           let original = Path.Combine(options.DestinationDirectory, Path.GetFileName(path))
-           // TODO use File.move once available -> HasFileMoveIO
-           from _2 in File<RT>.copy(path, original)
-           from _3 in File<RT>.delete(path)
-           from _4 in Img<RT>.CopyImageResized(
+        => from original in SuccessEff(Path.Combine(options.DestinationDirectory, Path.GetFileName(path)))
+           from _1 in FileMove<RT>.move(path, original)
+           from _2 in Img<RT>.CopyImageResized(
                original,
                Path.Combine(options.MovedDirectory, Path.GetFileName(path)),
                options.Width,

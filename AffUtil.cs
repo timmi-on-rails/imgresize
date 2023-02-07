@@ -2,32 +2,42 @@
 
 using LanguageExt;
 using LanguageExt.Effects.Traits;
-using System.Linq;
+using System.Threading.Channels;
 
 using static LanguageExt.Prelude;
 
 public static class AffUtil
 {
-    // TODO limit concurrent tasks
     public static Eff<RT, IAsyncEnumerable<Fin<T>>> Merge<RT, T>(
        this Seq<Aff<RT, T>> list,
        int maxConcurrent)
         where RT : struct, HasCancel<RT>
-    {
-        return Eff<RT, IAsyncEnumerable<Fin<T>>>(rt =>
+        => Eff<RT, IAsyncEnumerable<Fin<T>>>(env =>
         {
-            List<Task<Fin<T>>> tasks = new(list.Select(i => i.Run(rt).AsTask()));
-            return enumerate(tasks);
-        });
-
-        static async IAsyncEnumerable<Fin<T>> enumerate(List<Task<Fin<T>>> tasks)
-        {
-            while (tasks.Count > 0)
+            var channel = Channel.CreateUnbounded<Fin<T>>();
+            
+            var opts = new ParallelOptions
             {
-                var done = await Task.WhenAny(tasks);
-                tasks.Remove(done);
-                yield return done.Result;
+                MaxDegreeOfParallelism = maxConcurrent,
+                CancellationToken = env.CancellationToken
+            };
+
+            var task = Parallel.ForEachAsync(list, opts, async (aff, cancellationToken) =>
+            {
+                var result = await aff.Run(env).ConfigureAwait(false);
+                await channel.Writer.WriteAsync(result, cancellationToken).ConfigureAwait(false);
+            }).ContinueWith(_ => channel.Writer.Complete());
+       
+            return go();
+
+            async IAsyncEnumerable<Fin<T>> go()
+            {
+                await foreach (var t in channel.Reader.ReadAllAsync())
+                {
+                    yield return t;
+                }
+
+                await task;
             }
-        }
-    }
+        });
 }
